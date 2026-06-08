@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.24
 
 ARG RUST_VERSION=1.88
 ARG PROTON_PASS_VERSION=2.1.2
