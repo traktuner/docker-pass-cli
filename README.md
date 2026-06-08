@@ -26,9 +26,11 @@ The image version follows Proton Pass CLI:
 - `2.1.2`: moving alias for the newest broker revision on Pass CLI 2.1.2;
 - `latest`: newest supported Pass CLI and broker combination.
 
-Supported platforms are `linux/amd64` and `linux/arm64`. The runtime uses
-Chainguard's `cgr.dev/chainguard/glibc-dynamic`, runs as `1001:0`, and contains
-no shell or package manager.
+The initial pilot release supports `linux/amd64`. An arm64 release will follow
+after the pilot uses a native arm64 CI runner instead of compiling the Rust
+workspace through QEMU. The runtime uses Chainguard's
+`cgr.dev/chainguard/glibc-dynamic`, runs as `1001:0`, and contains no shell or
+package manager.
 
 ## Configuration
 
