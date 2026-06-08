@@ -161,6 +161,11 @@ impl AuthManager {
                 self.healthy.store(false, Ordering::Relaxed);
                 warn!("Secret lookup failed; validating the Proton Pass session");
 
+                if self.run_pass_cli(&["test"], HashMap::new()).await.is_ok() {
+                    self.healthy.store(true, Ordering::Relaxed);
+                    return Err(first_error);
+                }
+
                 if self.ensure_authenticated_locked().await.is_err() {
                     return Err(first_error.context("Session recovery failed"));
                 }

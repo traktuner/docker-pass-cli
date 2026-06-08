@@ -19,6 +19,13 @@ is the separate interface for arbitrary Proton Pass item fields.
 ghcr.io/traktuner/docker-pass-cli:2.1.2-1
 ```
 
+The image version follows Proton Pass CLI:
+
+- `2.1.2-1`: immutable first broker release containing Pass CLI 2.1.2;
+- `2.1.2-2`: broker-only fix while Pass CLI remains 2.1.2;
+- `2.1.2`: moving alias for the newest broker revision on Pass CLI 2.1.2;
+- `latest`: newest supported Pass CLI and broker combination.
+
 Supported platforms are `linux/amd64` and `linux/arm64`. The runtime uses
 Chainguard's `cgr.dev/chainguard/glibc-dynamic`, runs as `1001:0`, and contains
 no shell or package manager.
