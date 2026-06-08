@@ -5,21 +5,41 @@ ARG PROTON_PASS_VERSION=2.1.2
 ARG PROTON_PASS_COMMIT=b0a15d41dabc4e71d2cc3cf6710595a4271355b9
 
 FROM rust:${RUST_VERSION}-bookworm AS broker-builder
+ARG TARGETPLATFORM
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
-COPY broker ./broker
-RUN cargo build --locked --release --package proton-pass-broker
+COPY broker/Cargo.toml broker/Cargo.toml
+RUN mkdir -p broker/src && \
+    printf 'fn main() {}\n' > broker/src/main.rs
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=broker-target-${TARGETPLATFORM},target=/src/target,sharing=locked \
+    cargo build --locked --release --package proton-pass-broker
+COPY broker/src broker/src
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=broker-target-${TARGETPLATFORM},target=/src/target,sharing=locked \
+    cargo build --locked --release --package proton-pass-broker && \
+    install -D -m 0755 target/release/proton-pass-broker \
+      /out/proton-pass-broker
 
 FROM rust:${RUST_VERSION}-bookworm AS pass-cli-builder
 ARG PROTON_PASS_COMMIT
+ARG TARGETPLATFORM
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends git ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-RUN git clone https://github.com/protonpass/pass-cli.git . && \
+RUN git init . && \
+    git remote add origin https://github.com/protonpass/pass-cli.git && \
+    git fetch --depth 1 origin "${PROTON_PASS_COMMIT}" && \
     git checkout --detach "${PROTON_PASS_COMMIT}" && \
     test "$(git rev-parse HEAD)" = "${PROTON_PASS_COMMIT}"
-RUN cargo build --locked --release --package pass-cli
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=pass-cli-target-${TARGETPLATFORM},target=/src/target,sharing=locked \
+    cargo build --locked --release --package pass-cli && \
+    install -D -m 0755 target/release/pass-cli /out/pass-cli
 
 FROM cgr.dev/chainguard/glibc-dynamic:latest
 ARG PROTON_PASS_VERSION
@@ -34,8 +54,8 @@ LABEL org.opencontainers.image.title="Proton Pass Broker" \
       io.traktuner.proton-pass.version="${PROTON_PASS_VERSION}" \
       io.traktuner.proton-pass.commit="${PROTON_PASS_COMMIT}"
 
-COPY --from=broker-builder /src/target/release/proton-pass-broker /usr/local/bin/proton-pass-broker
-COPY --from=pass-cli-builder /src/target/release/pass-cli /usr/local/bin/pass-cli
+COPY --from=broker-builder /out/proton-pass-broker /usr/local/bin/proton-pass-broker
+COPY --from=pass-cli-builder /out/pass-cli /usr/local/bin/pass-cli
 COPY LICENSE THIRD_PARTY_NOTICES.md /licenses/
 
 USER 1001:0
