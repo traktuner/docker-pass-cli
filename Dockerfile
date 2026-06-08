@@ -19,6 +19,7 @@ COPY broker/src broker/src
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=broker-target-${TARGETPLATFORM},target=/src/target,sharing=locked \
+    touch broker/src/main.rs && \
     cargo build --locked --release --package proton-pass-broker && \
     install -D -m 0755 target/release/proton-pass-broker \
       /out/proton-pass-broker
