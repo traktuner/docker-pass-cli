@@ -6,6 +6,7 @@ on:
     tags: ["*"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,9 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - id: versions
+        run: |
+          echo "rust=$(sed -n 's/^ARG RUST_VERSION=//p' Dockerfile)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.96"
+          toolchain: ${{ steps.versions.outputs.rust }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
@@ -45,11 +49,14 @@ jobs:
           cache-to: type=gha,scope=container-build,mode=max
       - name: Verify image identity and runtime
         run: |
+          broker_version="$(sed -n 's/^version = \"\\([^\"]*\\)\"/\\1/p' Cargo.toml | head -1)"
+          pass_version="$(sed -n 's/^ARG PROTON_PASS_VERSION=//p' Dockerfile)"
+          pass_commit="$(sed -n 's/^ARG PROTON_PASS_COMMIT=//p' Dockerfile)"
           test "$(docker image inspect docker-pass-cli:test --format '{{.Config.User}}')" = "1001:0"
           test "$(docker run --rm docker-pass-cli:test --version)" = \
-            "proton-pass-broker 2.1.2-3"
+            "proton-pass-broker ${broker_version}"
           test "$(docker run --rm --entrypoint /usr/local/bin/pass-cli docker-pass-cli:test --version)" = \
-            "Proton Pass CLI 2.1.2 (b0a15d4)"
+            "Proton Pass CLI ${pass_version} (${pass_commit:0:7})"
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -81,14 +88,22 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: release
+        name: Validate release tag
+        run: |
+          broker_version="$(sed -n 's/^version = \"\\([^\"]*\\)\"/\\1/p' Cargo.toml | head -1)"
+          upstream_version="$(sed -n 's/^ARG PROTON_PASS_VERSION=//p' Dockerfile)"
+          test "${GITHUB_REF_NAME}" = "${broker_version}"
+          test "${broker_version%-*}" = "${upstream_version}"
+          echo "upstream_version=${upstream_version}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=tag
-            type=raw,value=2.1.2,enable=${{ startsWith(github.ref, 'refs/tags/2.1.2-') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/2.1.2-') }}
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=${{ steps.release.outputs.upstream_version }}
+            type=raw,value=latest
       - id: build
         uses: docker/build-push-action@v7
         with:

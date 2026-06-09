@@ -16,16 +16,14 @@ is the separate interface for arbitrary Proton Pass item fields.
 ## Image
 
 ```text
-ghcr.io/traktuner/docker-pass-cli:2.1.2-3
+ghcr.io/traktuner/docker-pass-cli:<pass-cli-version>-<broker-revision>
 ```
 
 The image version follows Proton Pass CLI:
 
-- `2.1.2-3`: current broker revision containing Pass CLI 2.1.2;
-- `2.1.2-2`: immutable broker revision containing Pass CLI 2.1.2;
-- `2.1.2-1`: immutable first broker release containing Pass CLI 2.1.2;
-- `2.1.2-2`: broker-only fix while Pass CLI remains 2.1.2;
-- `2.1.2`: moving alias for the newest broker revision on Pass CLI 2.1.2;
+- `<version>-1`: first broker release for a Pass CLI version;
+- `<version>-N`: broker-only revision while Pass CLI remains unchanged;
+- `<version>`: moving alias for the newest broker revision on that Pass CLI;
 - `latest`: newest supported Pass CLI and broker combination.
 
 The initial pilot release supports `linux/amd64`. An arm64 release will follow
@@ -85,7 +83,7 @@ proton-pass-broker healthcheck
 ```yaml
 services:
   proton-pass:
-    image: ghcr.io/traktuner/docker-pass-cli:2.1.2-3
+    image: ghcr.io/traktuner/docker-pass-cli:latest
     user: "1001:0"
     read_only: true
     cap_drop: [ALL]
@@ -149,5 +147,9 @@ cargo test
 docker build -t ghcr.io/traktuner/docker-pass-cli:dev .
 ```
 
-The build compiles Proton Pass CLI `2.1.2` from commit
-`b0a15d41dabc4e71d2cc3cf6710595a4271355b9` using its committed lockfile.
+The build compiles the configured Proton Pass CLI release from its exact
+release-tag commit using the upstream committed lockfile. A scheduled GitHub
+Actions workflow checks daily for a newer stable release and publishes the
+corresponding `<version>-1`, `<version>`, and `latest` image tags only after the
+normal tests, runtime verification, vulnerability scan, SBOM, and provenance
+steps pass.

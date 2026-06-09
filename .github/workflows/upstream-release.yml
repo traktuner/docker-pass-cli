@@ -1,0 +1,57 @@
+name: Upstream release
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Check latest stable Proton Pass CLI release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          output="$(scripts/sync-proton-pass-release.sh)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" >> "$GITHUB_OUTPUT"
+      - name: Commit upstream update
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.upstream.outputs.broker_version }}
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Dockerfile Cargo.toml Cargo.lock
+          git commit -m "chore: update Proton Pass CLI to ${RELEASE_TAG%-1}"
+          git push origin HEAD:main
+      - name: Ensure release tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ steps.upstream.outputs.broker_version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            created=false
+          else
+            git tag -a "$RELEASE_TAG" -m "docker-pass-cli $RELEASE_TAG"
+            git push origin "$RELEASE_TAG"
+            created=true
+          fi
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+      - name: Start release pipeline
+        if: steps.upstream.outputs.changed == 'true' || steps.release.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.broker_version }}
+        run: |
+          gh workflow run container.yml --ref "$RELEASE_TAG"
