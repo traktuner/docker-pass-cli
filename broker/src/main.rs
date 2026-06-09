@@ -130,7 +130,10 @@ impl AuthManager {
 
         self.healthy.store(false, Ordering::Relaxed);
         let token = read_token(&self.config.token_file)?;
-        self.run_pass_cli(&["login", "--pat", &token], HashMap::new())
+        let mut environment = HashMap::new();
+        environment.insert("PROTON_PASS_PERSONAL_ACCESS_TOKEN".to_string(), token);
+
+        self.run_pass_cli(&["login"], environment)
             .await
             .context("Proton Pass login failed")?;
         self.run_pass_cli(&["test"], HashMap::new())
@@ -621,8 +624,7 @@ case "$1" in
     test "$(cat "$state")" = "logged-in"
     ;;
   login)
-    test "$2" = "--pat"
-    printf 'login token=%s\n' "$3" >> "$log"
+    printf 'login token=%s\n' "$PROTON_PASS_PERSONAL_ACCESS_TOKEN" >> "$log"
     printf 'logged-in' > "$state"
     ;;
   item)

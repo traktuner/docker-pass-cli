@@ -16,12 +16,13 @@ is the separate interface for arbitrary Proton Pass item fields.
 ## Image
 
 ```text
-ghcr.io/traktuner/docker-pass-cli:2.1.2-2
+ghcr.io/traktuner/docker-pass-cli:2.1.2-3
 ```
 
 The image version follows Proton Pass CLI:
 
-- `2.1.2-2`: current broker revision containing Pass CLI 2.1.2;
+- `2.1.2-3`: current broker revision containing Pass CLI 2.1.2;
+- `2.1.2-2`: immutable broker revision containing Pass CLI 2.1.2;
 - `2.1.2-1`: immutable first broker release containing Pass CLI 2.1.2;
 - `2.1.2-2`: broker-only fix while Pass CLI remains 2.1.2;
 - `2.1.2`: moving alias for the newest broker revision on Pass CLI 2.1.2;
@@ -84,7 +85,7 @@ proton-pass-broker healthcheck
 ```yaml
 services:
   proton-pass:
-    image: ghcr.io/traktuner/docker-pass-cli:2.1.2-2
+    image: ghcr.io/traktuner/docker-pass-cli:2.1.2-3
     user: "1001:0"
     read_only: true
     cap_drop: [ALL]
@@ -134,8 +135,8 @@ Use stable Share ID and Item ID references in deployed configuration.
 - Agent reason is required for every read.
 - CLI calls are serialized.
 - Session is checked every five minutes and recreated from the scoped token.
-- The token is supplied only as the upstream CLI's required `--pat` argument
-  to the short-lived login child process and is never logged.
+- The token is supplied only through `PROTON_PASS_PERSONAL_ACCESS_TOKEN` to the
+  short-lived login child process and is never logged.
 
 ## Build
 
