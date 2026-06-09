@@ -119,12 +119,16 @@ Create an audited agent with viewer access to the required item:
 ```bash
 pass-cli agent create semaphore-infra --expiration 3m
 pass-cli agent access grant semaphore-infra \
-  --vault-name Infrastructure \
-  --item-title Karakeep \
+  --vault-name docker-secrets \
+  --item-title karakeep \
   --role viewer
+pass-cli agent renew semaphore-infra --expiration 3m
 ```
 
-Use stable Share ID and Item ID references in deployed configuration.
+Use the renewed token. For an item-scoped grant, log in as the agent and run
+`pass-cli share list --output json`: Proton creates a direct Item share with
+its own Share ID. Deployed references must use that agent Item share ID plus
+the unchanged Item ID, not the user's original vault Share ID.
 
 ## Security properties
 
