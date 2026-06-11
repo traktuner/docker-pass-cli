@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "proton-pass-broker"
-version = "2.1.2-3"
+version = "2.1.2-4"
 dependencies = [
  "anyhow",
  "bytes",
