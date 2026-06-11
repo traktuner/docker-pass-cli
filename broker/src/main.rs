@@ -182,8 +182,12 @@ impl AuthManager {
     async fn resolve_locked(&self, reference: &str, reason: &str) -> Result<String> {
         let mut environment = HashMap::new();
         environment.insert("PROTON_PASS_AGENT_REASON".to_string(), reason.to_string());
+        let arguments = pass_cli_view_arguments(reference);
         let output = self
-            .run_pass_cli(&["item", "view", reference], environment)
+            .run_pass_cli(
+                &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+                environment,
+            )
             .await?;
 
         if output.len() > MAX_SECRET_BYTES {
@@ -431,6 +435,41 @@ fn internal_error() -> Response<ResponseBody> {
         .expect("static response must be valid")
 }
 
+/// Reference scheme. `pass://` carries opaque, keyset-bound IDs (legacy);
+/// `proton://` carries stable vault and item names resolved by pass-cli.
+enum ReferenceScheme {
+    Id,
+    Name,
+}
+
+/// A reference split into its scheme and three `/`-separated components.
+struct ParsedReference<'a> {
+    scheme: ReferenceScheme,
+    first: &'a str,
+    second: &'a str,
+    field: &'a str,
+}
+
+/// Split a `pass://` or `proton://` reference into its components without
+/// validating them. Returns `None` for unknown schemes.
+fn split_reference(reference: &str) -> Option<ParsedReference<'_>> {
+    let (scheme, remainder) = if let Some(rest) = reference.strip_prefix("pass://") {
+        (ReferenceScheme::Id, rest)
+    } else if let Some(rest) = reference.strip_prefix("proton://") {
+        (ReferenceScheme::Name, rest)
+    } else {
+        return None;
+    };
+
+    let mut components = remainder.splitn(3, '/');
+    Some(ParsedReference {
+        scheme,
+        first: components.next().unwrap_or_default(),
+        second: components.next().unwrap_or_default(),
+        field: components.next().unwrap_or_default(),
+    })
+}
+
 fn validate_reference(reference: &str) -> Result<()> {
     if reference.len() > MAX_REFERENCE_BYTES {
         bail!("Secret reference is too long");
@@ -439,21 +478,53 @@ fn validate_reference(reference: &str) -> Result<()> {
         bail!("Secret reference must be ASCII without whitespace");
     }
 
-    let remainder = reference
-        .strip_prefix("pass://")
-        .ok_or_else(|| anyhow!("Secret reference must start with pass://"))?;
-    let mut components = remainder.splitn(3, '/');
-    let share_id = components.next().unwrap_or_default();
-    let item_id = components.next().unwrap_or_default();
-    let field = components.next().unwrap_or_default();
+    let parsed = split_reference(reference)
+        .ok_or_else(|| anyhow!("Secret reference must start with pass:// or proton://"))?;
 
-    if share_id.is_empty() || item_id.is_empty() || field.is_empty() {
-        bail!("Secret reference must contain share ID, item ID, and field");
+    if parsed.first.is_empty() || parsed.second.is_empty() || parsed.field.is_empty() {
+        match parsed.scheme {
+            ReferenceScheme::Id => {
+                bail!("Secret reference must contain share ID, item ID, and field")
+            }
+            ReferenceScheme::Name => {
+                bail!("Secret reference must contain vault name, item title, and field")
+            }
+        }
     }
-    if field.ends_with('/') {
+    if parsed.field.ends_with('/') {
         bail!("Secret reference must not end with a slash");
     }
     Ok(())
+}
+
+/// Build the `pass-cli item view` argument list for a reference. The reference
+/// is assumed to have passed [`validate_reference`]. `pass://` references are
+/// forwarded as a positional URI; `proton://` references are translated into
+/// the named `--vault-name/--item-title/--field` flags so pass-cli resolves the
+/// keyset-bound IDs at runtime.
+fn pass_cli_view_arguments(reference: &str) -> Vec<String> {
+    match split_reference(reference) {
+        Some(ParsedReference {
+            scheme: ReferenceScheme::Name,
+            first,
+            second,
+            field,
+        }) => vec![
+            "item".to_string(),
+            "view".to_string(),
+            "--vault-name".to_string(),
+            first.to_string(),
+            "--item-title".to_string(),
+            second.to_string(),
+            "--field".to_string(),
+            field.to_string(),
+        ],
+        _ => vec![
+            "item".to_string(),
+            "view".to_string(),
+            reference.to_string(),
+        ],
+    }
 }
 
 fn validate_reason(reason: &str) -> Result<()> {
@@ -517,13 +588,48 @@ mod tests {
     }
 
     #[test]
+    fn accepts_valid_name_reference() {
+        assert!(validate_reference("proton://docker-secrets/traefik/CF_TUNNEL_ID").is_ok());
+    }
+
+    #[test]
     fn rejects_reference_without_field() {
         assert!(validate_reference("pass://share_123/item_456").is_err());
     }
 
     #[test]
+    fn rejects_name_reference_without_field() {
+        assert!(validate_reference("proton://docker-secrets/traefik").is_err());
+    }
+
+    #[test]
     fn rejects_invalid_reference_scheme() {
         assert!(validate_reference("https://share/item/password").is_err());
+    }
+
+    #[test]
+    fn id_reference_is_forwarded_as_positional_uri() {
+        assert_eq!(
+            pass_cli_view_arguments("pass://share_123/item_456/password"),
+            vec!["item", "view", "pass://share_123/item_456/password"]
+        );
+    }
+
+    #[test]
+    fn name_reference_is_translated_to_named_flags() {
+        assert_eq!(
+            pass_cli_view_arguments("proton://docker-secrets/traefik/CF_TUNNEL_ID"),
+            vec![
+                "item",
+                "view",
+                "--vault-name",
+                "docker-secrets",
+                "--item-title",
+                "traefik",
+                "--field",
+                "CF_TUNNEL_ID",
+            ]
+        );
     }
 
     #[test]

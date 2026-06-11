@@ -2,8 +2,8 @@
 
 Minimal Unix-socket broker around the open-source
 [Proton Pass CLI](https://github.com/protonpass/pass-cli). It is intended for
-automation systems that must resolve scoped `pass://` references without
-receiving the Proton Pass token or session.
+automation systems that must resolve scoped `pass://` or `proton://` references
+without receiving the Proton Pass token or session.
 
 The image contains two binaries:
 
@@ -55,7 +55,7 @@ POST /v1/resolve
 Content-Type: application/json
 
 {
-  "reference": "pass://SHARE_ID/ITEM_ID/FIELD",
+  "reference": "proton://VAULT_NAME/ITEM_TITLE/FIELD",
   "reason": "Semaphore deploy karakeep on slvpdocker01"
 }
 ```
@@ -65,6 +65,19 @@ Response:
 ```json
 {"value":"resolved-secret"}
 ```
+
+### Reference formats
+
+| Scheme | Form | Resolution |
+| --- | --- | --- |
+| `proton://` | `proton://VAULT_NAME/ITEM_TITLE/FIELD` | pass-cli resolves the names at runtime (`--vault-name/--item-title/--field`). Recommended. |
+| `pass://` | `pass://SHARE_ID/ITEM_ID/FIELD` | Forwarded as a positional URI. Legacy. |
+
+Prefer `proton://`: vault names and item titles are stable across sessions,
+while Share IDs are keyset-bound and differ between the user session and an
+agent session, and change when the agent token is rotated. Vault names and item
+titles used in a reference must be unique within their scope and contain no
+whitespace or `/` (the reference is split on `/`).
 
 Health:
 
@@ -123,14 +136,22 @@ pass-cli agent access grant semaphore-infra \
 pass-cli agent renew semaphore-infra --expiration 3m
 ```
 
-Use the renewed token. For an item-scoped grant, log in as the agent and run
-`pass-cli share list --output json`: Proton creates a direct Item share with
-its own Share ID. Deployed references must use that agent Item share ID plus
-the unchanged Item ID, not the user's original vault Share ID.
+Use the renewed token. With `proton://` references no Share ID handling is
+required: pass-cli resolves the vault name and item title against whatever
+session is active, so the same reference works for the user session and the
+agent session, and survives token rotation.
+
+Legacy `pass://` references are keyset-bound: for an item-scoped grant, logging
+in as the agent and running `pass-cli share list --output json` shows that
+Proton creates a direct Item share with its own Share ID, and the reference must
+use that agent Item share ID plus the unchanged Item ID, not the user's original
+vault Share ID. This is exactly the fragility `proton://` avoids.
 
 ## Security properties
 
-- Fixed `pass-cli` argument list; requests cannot execute arbitrary commands.
+- Fixed `pass-cli` argument list per reference scheme; requests cannot execute
+  arbitrary commands. Each reference is validated, then mapped to either
+  `item view <pass-uri>` or `item view --vault-name … --item-title … --field …`.
 - No secret cache.
 - Child-process stderr is discarded and API errors are generic.
 - Request, reference, output, reason, and timeout limits.
