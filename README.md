@@ -153,11 +153,16 @@ vault Share ID. This is exactly the fragility `proton://` avoids.
   arbitrary commands. Each reference is validated, then mapped to either
   `item view <pass-uri>` or `item view --vault-name … --item-title … --field …`.
 - No secret cache.
-- Child-process stderr is discarded and API errors are generic.
+- HTTP/API errors are generic. Child-process stderr is logged broker-side for
+  diagnostics (expired token, undecryptable session, network) but never the
+  secret value, which is read from stdout and is never logged.
 - Request, reference, output, reason, and timeout limits.
 - Agent reason is required for every read.
 - CLI calls are serialized.
 - Session is checked every five minutes and recreated from the scoped token.
+- A stale or undecryptable local session (e.g. an AEAD decryption error from a
+  desynced local key) is detected, purged from `<session_dir>/.session`, and
+  rebuilt from the token automatically — no manual intervention.
 - The token is supplied only through `PROTON_PASS_PERSONAL_ACCESS_TOKEN` to the
   short-lived login child process and is never logged.
 

@@ -129,6 +129,29 @@ impl AuthManager {
         }
 
         self.healthy.store(false, Ordering::Relaxed);
+
+        // Normal path: re-login from the scoped token.
+        if self.login_and_validate().await.is_ok() {
+            self.healthy.store(true, Ordering::Relaxed);
+            return Ok(());
+        }
+
+        // Recovery path: a stale or desynced local session — e.g. a local key
+        // that no longer matches the encrypted session database, surfacing as
+        // an AEAD decryption error — makes pass-cli fail on *every* command,
+        // including login itself. Purge the local session state and retry from
+        // a clean slate. The scoped token remains the source of truth, so the
+        // session is always rebuildable.
+        warn!("Proton Pass login failed; purging local session state and retrying");
+        self.purge_session_state()?;
+        self.login_and_validate()
+            .await
+            .context("Proton Pass login failed after purging local session state")?;
+        self.healthy.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn login_and_validate(&self) -> Result<()> {
         let token = read_token(&self.config.token_file)?;
         let mut environment = HashMap::new();
         environment.insert("PROTON_PASS_PERSONAL_ACCESS_TOKEN".to_string(), token);
@@ -139,8 +162,19 @@ impl AuthManager {
         self.run_pass_cli(&["test"], HashMap::new())
             .await
             .context("Proton Pass session validation failed after login")?;
-        self.healthy.store(true, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Remove pass-cli's local session state (`<session_dir>/.session`, which
+    /// holds the encrypted session database and the local key). Used to recover
+    /// from an undecryptable session that would otherwise block every command.
+    fn purge_session_state(&self) -> Result<()> {
+        let state = self.config.session_dir.join(".session");
+        match fs::remove_dir_all(&state) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).context("Unable to purge local Proton Pass session state"),
+        }
     }
 
     async fn resolve(&self, reference: &str, reason: &str) -> Result<String> {
@@ -213,7 +247,7 @@ impl AuthManager {
             .envs(extra_environment)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
 
         for proxy in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] {
@@ -228,6 +262,22 @@ impl AuthManager {
             .context("pass-cli command timed out")??;
 
         if !output.status.success() {
+            // Surface pass-cli's own diagnostics in the broker log so failures
+            // (expired token, undecryptable session, network) are not opaque.
+            // stderr carries error text only; the secret value, if any, is on
+            // stdout and is never logged. The HTTP response stays generic.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr.trim();
+            let snippet: String = detail.chars().take(500).collect();
+            warn!(
+                command = arguments.first().copied().unwrap_or("?"),
+                detail = if snippet.is_empty() {
+                    "no stderr output"
+                } else {
+                    &snippet
+                },
+                "pass-cli command failed"
+            );
             bail!("pass-cli command failed");
         }
 
@@ -693,6 +743,30 @@ mod tests {
         assert!(manager.is_healthy());
     }
 
+    #[tokio::test]
+    async fn broker_recovers_from_undecryptable_session() {
+        let test = BrokerTest::new_self_heal();
+        let state = test.session_path.join(".session");
+
+        let manager = AuthManager::new(test.config());
+        manager.ensure_authenticated().await.unwrap();
+
+        // The first login is blocked by the corrupt session; the broker purges
+        // the local state and a retry creates a fresh, valid session.
+        assert!(manager.is_healthy());
+        assert!(state.join("valid").exists());
+        assert!(!state.join("corrupt").exists());
+    }
+
+    #[test]
+    fn purge_session_state_is_idempotent_when_absent() {
+        let test = BrokerTest::new();
+        let manager = AuthManager::new(test.config());
+        // No .session directory exists yet; purging must succeed regardless.
+        manager.purge_session_state().unwrap();
+        manager.purge_session_state().unwrap();
+    }
+
     struct BrokerTest {
         _directory: tempfile::TempDir,
         pass_cli_path: PathBuf,
@@ -745,6 +819,58 @@ esac
                 state_path.display(),
                 log_path.display()
             );
+            fs::write(&pass_cli_path, script).unwrap();
+            fs::set_permissions(&pass_cli_path, fs::Permissions::from_mode(0o700)).unwrap();
+
+            Self {
+                _directory: directory,
+                pass_cli_path,
+                token_path,
+                session_path,
+                state_path,
+                log_path,
+            }
+        }
+
+        /// Build a harness whose mock pass-cli starts with a corrupt local
+        /// session: `login` fails while `<session_dir>/.session/corrupt` exists
+        /// and no `valid` marker is present, mimicking an undecryptable session
+        /// that blocks every command until the state is purged.
+        fn new_self_heal() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let pass_cli_path = directory.path().join("pass-cli");
+            let token_path = directory.path().join("token");
+            let session_path = directory.path().join("session");
+            let state_path = directory.path().join("state");
+            let log_path = directory.path().join("commands-self-heal.log");
+
+            fs::create_dir(&session_path).unwrap();
+            fs::write(&token_path, "pst_example::key\n").unwrap();
+            fs::set_permissions(&token_path, fs::Permissions::from_mode(0o400)).unwrap();
+
+            let state = session_path.join(".session");
+            fs::create_dir_all(&state).unwrap();
+            fs::write(state.join("corrupt"), "x").unwrap();
+
+            let script = r#"#!/bin/sh
+set -eu
+sd="$PROTON_PASS_SESSION_DIR/.session"
+case "$1" in
+  test)
+    test -f "$sd/valid"
+    ;;
+  login)
+    if [ -f "$sd/corrupt" ]; then
+      exit 1
+    fi
+    mkdir -p "$sd"
+    : > "$sd/valid"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+"#;
             fs::write(&pass_cli_path, script).unwrap();
             fs::set_permissions(&pass_cli_path, fs::Permissions::from_mode(0o700)).unwrap();
 
