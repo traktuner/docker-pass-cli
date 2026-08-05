@@ -160,9 +160,11 @@ vault Share ID. This is exactly the fragility `proton://` avoids.
 - Agent reason is required for every read.
 - CLI calls are serialized.
 - Session is checked every five minutes and recreated from the scoped token.
-- A stale or undecryptable local session (e.g. an AEAD decryption error from a
-  desynced local key) is detected, purged from `<session_dir>/.session`, and
-  rebuilt from the token automatically — no manual intervention.
+- A stale or undecryptable local session is purged only when pass-cli reports
+  explicit local corruption (for example an AEAD/session-decryption error), then
+  rebuilt from the token automatically. Transient DNS, connection, and timeout
+  failures preserve the existing session instead of turning an outage into a
+  forced re-login.
 - The token is supplied only through `PROTON_PASS_PERSONAL_ACCESS_TOKEN` to the
   short-lived login child process and is never logged.
 

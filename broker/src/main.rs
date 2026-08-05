@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    env, fs,
+    env, fmt, fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Stdio,
@@ -104,6 +104,33 @@ struct AuthManager {
     healthy: AtomicBool,
 }
 
+#[derive(Debug)]
+struct PassCliCommandError {
+    command: String,
+    detail: String,
+}
+
+impl fmt::Display for PassCliCommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "pass-cli command failed: {}", self.command)
+    }
+}
+
+impl std::error::Error for PassCliCommandError {}
+
+fn is_local_session_corruption(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<PassCliCommandError>()
+            .is_some_and(|command_error| {
+                let detail = command_error.detail.to_ascii_lowercase();
+                detail.contains("aead")
+                    || detail.contains("local key")
+                    || (detail.contains("decrypt") && detail.contains("session"))
+            })
+    })
+}
+
 impl AuthManager {
     fn new(config: Config) -> Self {
         Self {
@@ -130,10 +157,22 @@ impl AuthManager {
 
         self.healthy.store(false, Ordering::Relaxed);
 
-        // Normal path: re-login from the scoped token.
-        if self.login_and_validate().await.is_ok() {
-            self.healthy.store(true, Ordering::Relaxed);
-            return Ok(());
+        // Normal path: re-login from the scoped token. A connectivity failure
+        // can make `test` fail while the local session remains valid; in that
+        // case pass-cli answers `Already authenticated` to `login`. Preserve
+        // the session unless pass-cli explicitly identifies local corruption.
+        let login_error = match self.login_and_validate().await {
+            Ok(()) => {
+                self.healthy.store(true, Ordering::Relaxed);
+                return Ok(());
+            }
+            Err(error) => error,
+        };
+
+        if !is_local_session_corruption(&login_error) {
+            return Err(login_error.context(
+                "Proton Pass login failed without evidence of local session corruption; preserving session state",
+            ));
         }
 
         // Recovery path: a stale or desynced local session — e.g. a local key
@@ -278,7 +317,11 @@ impl AuthManager {
                 },
                 "pass-cli command failed"
             );
-            bail!("pass-cli command failed");
+            return Err(PassCliCommandError {
+                command: arguments.first().copied().unwrap_or("?").to_string(),
+                detail: snippet,
+            }
+            .into());
         }
 
         String::from_utf8(output.stdout).context("pass-cli returned invalid UTF-8")
@@ -758,6 +801,25 @@ mod tests {
         assert!(!state.join("corrupt").exists());
     }
 
+    #[tokio::test]
+    async fn broker_preserves_valid_session_during_transient_network_failure() {
+        let test = BrokerTest::new_transient_network_failure();
+        let state = test.session_path.join(".session");
+        let valid = state.join("valid");
+
+        let manager = AuthManager::new(test.config());
+        let error = manager.ensure_authenticated().await.unwrap_err();
+
+        assert!(!manager.is_healthy());
+        assert!(valid.exists());
+        assert!(error.to_string().contains("preserving session state"));
+
+        fs::write(&test.state_path, "network-up").unwrap();
+        manager.ensure_authenticated().await.unwrap();
+        assert!(manager.is_healthy());
+        assert!(valid.exists());
+    }
+
     #[test]
     fn purge_session_state_is_idempotent_when_absent() {
         let test = BrokerTest::new();
@@ -861,6 +923,7 @@ case "$1" in
     ;;
   login)
     if [ -f "$sd/corrupt" ]; then
+      echo 'Error: AEAD decryption error while opening local session' >&2
       exit 1
     fi
     mkdir -p "$sd"
@@ -871,6 +934,64 @@ case "$1" in
     ;;
 esac
 "#;
+            fs::write(&pass_cli_path, script).unwrap();
+            fs::set_permissions(&pass_cli_path, fs::Permissions::from_mode(0o700)).unwrap();
+
+            Self {
+                _directory: directory,
+                pass_cli_path,
+                token_path,
+                session_path,
+                state_path,
+                log_path,
+            }
+        }
+
+        /// Build a harness with a valid persisted session while network access
+        /// is temporarily unavailable. `test` reports DNS failure and `login`
+        /// correctly refuses to replace the already-authenticated session.
+        fn new_transient_network_failure() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let pass_cli_path = directory.path().join("pass-cli");
+            let token_path = directory.path().join("token");
+            let session_path = directory.path().join("session");
+            let state_path = directory.path().join("network-state");
+            let log_path = directory.path().join("commands-network.log");
+
+            let state = session_path.join(".session");
+            fs::create_dir_all(&state).unwrap();
+            fs::write(state.join("valid"), "x").unwrap();
+            fs::write(&state_path, "network-down").unwrap();
+            fs::write(&token_path, "pst_example::key\n").unwrap();
+            fs::set_permissions(&token_path, fs::Permissions::from_mode(0o400)).unwrap();
+
+            let script = format!(
+                r#"#!/bin/sh
+set -eu
+network_state="{}"
+sd="$PROTON_PASS_SESSION_DIR/.session"
+case "$1" in
+  test)
+    if [ "$(cat "$network_state")" = "network-down" ]; then
+      echo 'Error: failed to connect to host: error resolving destination' >&2
+      exit 1
+    fi
+    test -f "$sd/valid"
+    ;;
+  login)
+    if [ -f "$sd/valid" ]; then
+      echo 'Error: Already authenticated' >&2
+      exit 1
+    fi
+    exit 1
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+"#,
+                state_path.display()
+            );
             fs::write(&pass_cli_path, script).unwrap();
             fs::set_permissions(&pass_cli_path, fs::Permissions::from_mode(0o700)).unwrap();
 
