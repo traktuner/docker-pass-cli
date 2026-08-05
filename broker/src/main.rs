@@ -39,6 +39,7 @@ const DEFAULT_SOCKET: &str = "/run/proton-pass/broker.sock";
 const DEFAULT_SESSION_DIR: &str = "/var/lib/proton-pass/session";
 const DEFAULT_TOKEN_FILE: &str = "/run/secrets/proton_pass_agent_token";
 const DEFAULT_PASS_CLI: &str = "/usr/local/bin/pass-cli";
+const SESSION_PROBE_ARGUMENTS: &[&str] = &["info", "--output", "json"];
 
 #[derive(Parser)]
 #[command(version, about = "Unix-socket broker for scoped Proton Pass lookups")]
@@ -118,7 +119,7 @@ impl fmt::Display for PassCliCommandError {
 
 impl std::error::Error for PassCliCommandError {}
 
-fn is_local_session_corruption(error: &anyhow::Error) -> bool {
+fn is_recoverable_session_failure(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<PassCliCommandError>()
@@ -127,6 +128,9 @@ fn is_local_session_corruption(error: &anyhow::Error) -> bool {
                 detail.contains("aead")
                     || detail.contains("local key")
                     || (detail.contains("decrypt") && detail.contains("session"))
+                    || detail.contains("non-existent session")
+                    || detail.contains("session has been invalidated")
+                    || detail.contains("session invalidated")
             })
     })
 }
@@ -150,15 +154,21 @@ impl AuthManager {
     }
 
     async fn ensure_authenticated_locked(&self) -> Result<()> {
-        if self.run_pass_cli(&["test"], HashMap::new()).await.is_ok() {
-            self.healthy.store(true, Ordering::Relaxed);
-            return Ok(());
-        }
+        let probe_error = match self
+            .run_pass_cli(SESSION_PROBE_ARGUMENTS, HashMap::new())
+            .await
+        {
+            Ok(_) => {
+                self.healthy.store(true, Ordering::Relaxed);
+                return Ok(());
+            }
+            Err(error) => error,
+        };
 
         self.healthy.store(false, Ordering::Relaxed);
 
         // Normal path: re-login from the scoped token. A connectivity failure
-        // can make `test` fail while the local session remains valid; in that
+        // can make `info` fail while the local session remains valid; in that
         // case pass-cli answers `Already authenticated` to `login`. Preserve
         // the session unless pass-cli explicitly identifies local corruption.
         let login_error = match self.login_and_validate().await {
@@ -169,9 +179,11 @@ impl AuthManager {
             Err(error) => error,
         };
 
-        if !is_local_session_corruption(&login_error) {
+        if !is_recoverable_session_failure(&probe_error)
+            && !is_recoverable_session_failure(&login_error)
+        {
             return Err(login_error.context(
-                "Proton Pass login failed without evidence of local session corruption; preserving session state",
+                "Proton Pass login failed without evidence of a recoverable session failure; preserving session state",
             ));
         }
 
@@ -198,7 +210,7 @@ impl AuthManager {
         self.run_pass_cli(&["login"], environment)
             .await
             .context("Proton Pass login failed")?;
-        self.run_pass_cli(&["test"], HashMap::new())
+        self.run_pass_cli(SESSION_PROBE_ARGUMENTS, HashMap::new())
             .await
             .context("Proton Pass session validation failed after login")?;
         Ok(())
@@ -234,7 +246,11 @@ impl AuthManager {
                 self.healthy.store(false, Ordering::Relaxed);
                 warn!("Secret lookup failed; validating the Proton Pass session");
 
-                if self.run_pass_cli(&["test"], HashMap::new()).await.is_ok() {
+                if self
+                    .run_pass_cli(SESSION_PROBE_ARGUMENTS, HashMap::new())
+                    .await
+                    .is_ok()
+                {
                     self.healthy.store(true, Ordering::Relaxed);
                     return Err(first_error);
                 }
@@ -820,6 +836,19 @@ mod tests {
         assert!(valid.exists());
     }
 
+    #[tokio::test]
+    async fn broker_rebuilds_explicitly_invalidated_session() {
+        let test = BrokerTest::new_invalidated_session();
+        let state = test.session_path.join(".session");
+
+        let manager = AuthManager::new(test.config());
+        manager.ensure_authenticated().await.unwrap();
+
+        assert!(manager.is_healthy());
+        assert!(state.join("valid").exists());
+        assert!(!state.join("invalidated").exists());
+    }
+
     #[test]
     fn purge_session_state_is_idempotent_when_absent() {
         let test = BrokerTest::new();
@@ -862,7 +891,7 @@ set -eu
 state="{}"
 log="{}"
 case "$1" in
-  test)
+  info)
     test "$(cat "$state")" = "logged-in"
     ;;
   login)
@@ -918,7 +947,7 @@ esac
 set -eu
 sd="$PROTON_PASS_SESSION_DIR/.session"
 case "$1" in
-  test)
+  info)
     test -f "$sd/valid"
     ;;
   login)
@@ -948,7 +977,7 @@ esac
         }
 
         /// Build a harness with a valid persisted session while network access
-        /// is temporarily unavailable. `test` reports DNS failure and `login`
+        /// is temporarily unavailable. `info` reports DNS failure and `login`
         /// correctly refuses to replace the already-authenticated session.
         fn new_transient_network_failure() -> Self {
             let directory = tempfile::tempdir().unwrap();
@@ -971,7 +1000,7 @@ set -eu
 network_state="{}"
 sd="$PROTON_PASS_SESSION_DIR/.session"
 case "$1" in
-  test)
+  info)
     if [ "$(cat "$network_state")" = "network-down" ]; then
       echo 'Error: failed to connect to host: error resolving destination' >&2
       exit 1
@@ -992,6 +1021,60 @@ esac
 "#,
                 state_path.display()
             );
+            fs::write(&pass_cli_path, script).unwrap();
+            fs::set_permissions(&pass_cli_path, fs::Permissions::from_mode(0o700)).unwrap();
+
+            Self {
+                _directory: directory,
+                pass_cli_path,
+                token_path,
+                session_path,
+                state_path,
+                log_path,
+            }
+        }
+
+        /// Build a harness with local state that the service explicitly reports
+        /// as invalidated. The first login sees the still-present local marker;
+        /// after the broker purges it, a second login creates a valid session.
+        fn new_invalidated_session() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let pass_cli_path = directory.path().join("pass-cli");
+            let token_path = directory.path().join("token");
+            let session_path = directory.path().join("session");
+            let state_path = directory.path().join("state");
+            let log_path = directory.path().join("commands-invalidated.log");
+
+            let state = session_path.join(".session");
+            fs::create_dir_all(&state).unwrap();
+            fs::write(state.join("invalidated"), "x").unwrap();
+            fs::write(&token_path, "pst_example::key\n").unwrap();
+            fs::set_permissions(&token_path, fs::Permissions::from_mode(0o400)).unwrap();
+
+            let script = r#"#!/bin/sh
+set -eu
+sd="$PROTON_PASS_SESSION_DIR/.session"
+case "$1" in
+  info)
+    if [ -f "$sd/invalidated" ]; then
+      echo 'Error: failed to authenticate: non-existent session' >&2
+      exit 1
+    fi
+    test -f "$sd/valid"
+    ;;
+  login)
+    if [ -f "$sd/invalidated" ]; then
+      echo 'Error: Already authenticated' >&2
+      exit 1
+    fi
+    mkdir -p "$sd"
+    : > "$sd/valid"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+"#;
             fs::write(&pass_cli_path, script).unwrap();
             fs::set_permissions(&pass_cli_path, fs::Permissions::from_mode(0o700)).unwrap();
 

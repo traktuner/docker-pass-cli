@@ -57,6 +57,8 @@ jobs:
             "proton-pass-broker ${broker_version}"
           test "$(docker run --rm --entrypoint /usr/local/bin/pass-cli docker-pass-cli:test --version)" = \
             "Proton Pass CLI ${pass_version} (${pass_commit:0:7})"
+          docker run --rm --entrypoint /usr/local/bin/pass-cli docker-pass-cli:test \
+            info --help | grep -F "Show information about the current session"
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
