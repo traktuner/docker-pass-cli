@@ -253,3 +253,64 @@ fn scoped_rejects_unbounded_deadlines_and_missing_login_token_before_spawn() {
     assert!(!test.session.join("spawned").exists());
     test.assert_retained();
 }
+
+#[test]
+fn scoped_deadline_also_bounds_a_controller_that_stops_reading_metadata() {
+    let test = Fixture::new("/usr/bin/head -c 262144 /dev/zero");
+    let mut child = test
+        .command(&["share", "list", "--output", "json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    // Keep the reader open without draining it. Command::output() cannot
+    // reproduce controller backpressure because it drains the pipe itself.
+    let _reader = child.stdout.take().unwrap();
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > Duration::from_secs(4) {
+            child.kill().unwrap();
+            break child.wait().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(
+        status.code(),
+        Some(124),
+        "Metadata delivery exceeded its deadline"
+    );
+    test.assert_retained();
+}
+
+#[test]
+fn scoped_rejects_hardlinked_session_files() {
+    let test = Fixture::new("touch \"$PROTON_PASS_SESSION_DIR/spawned\"");
+    fs::hard_link(
+        test.root.join("normal-session-marker"),
+        test.session.join("shared-file"),
+    )
+    .unwrap();
+    assert!(!test.run(&["info"]).status.success());
+    assert!(!test.session.join("spawned").exists());
+    test.assert_retained();
+}
+
+#[test]
+fn scoped_output_limit_stops_the_cli_without_forwarding_partial_output() {
+    let test = Fixture::new(
+        "echo $$ > \"$PROTON_PASS_SESSION_DIR/pid\"; exec /usr/bin/head -c 1048577 /dev/zero",
+    );
+    let output = test.run(&["info"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let pid: i32 = fs::read_to_string(test.session.join("pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    test.assert_retained();
+}
