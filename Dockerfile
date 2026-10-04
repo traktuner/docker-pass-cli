@@ -36,6 +36,9 @@ RUN git init . && \
     git fetch --depth 1 origin "${PROTON_PASS_COMMIT}" && \
     git checkout --detach "${PROTON_PASS_COMMIT}" && \
     test "$(git rev-parse HEAD)" = "${PROTON_PASS_COMMIT}"
+COPY upstream-lock-patches /upstream-lock-patches
+COPY scripts/apply-upstream-lock-patch.sh /apply-upstream-lock-patch.sh
+RUN /bin/sh /apply-upstream-lock-patch.sh "${PROTON_PASS_COMMIT}"
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=pass-cli-target-${TARGETPLATFORM},target=/src/target,sharing=locked \
