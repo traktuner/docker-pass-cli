@@ -133,8 +133,10 @@ group and waits up to five additional seconds to reap the CLI process. Exit
 failures exit `1`. A process stuck in uninterruptible kernel sleep can prevent
 confirmation; the executor reports failure and retains the session.
 
-Metadata output is capped at 1 MiB. Authentication output and all CLI stderr are
-discarded. Failed commands print only generic errors. The command never removes
+Metadata output is capped at 1 MiB. Its delivery uses nonblocking writes within
+the same deadline. A failed delivery can leave partial metadata in stdout;
+consumers must reject output after any nonzero exit. Authentication output and
+all CLI stderr are discarded. Failed commands print only generic errors. The command never removes
 session data. The controller must require successful inspection and logout
 before it removes only its own generated directory.
 
