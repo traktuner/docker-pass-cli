@@ -66,13 +66,15 @@ jobs:
       - name: Verify the scoped CLI surface and normal-session rejection
         run: |
           docker run --rm docker-pass-cli:test scoped --help | grep -F -- "--session-dir"
-          if docker run --rm --network none --read-only --cap-drop ALL \
+          set +e
+          scoped_output="$(docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges:true \
             --env PROTON_PASS_AGENT_REASON="CI rejects the normal broker session" \
-            docker-pass-cli:test scoped --session-dir /var/lib/proton-pass/session -- info; then
-            echo "The scoped command accepted the normal broker session" >&2
-            exit 1
-          fi
+            docker-pass-cli:test scoped --session-dir /var/lib/proton-pass/session -- info 2>&1)"
+          scoped_status=$?
+          set -e
+          test "$scoped_status" -eq 1
+          test "$scoped_output" = "Scoped pass-cli execution failed; session preserved"
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
