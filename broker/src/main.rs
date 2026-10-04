@@ -394,7 +394,9 @@ async fn main() -> Result<()> {
             if let Err(error) = result {
                 // Neither raw child output nor rejected argument values are diagnostics.
                 if error.is::<scoped::DeadlineExceeded>() {
-                    scoped::report_failure(b"Scoped pass-cli deadline exceeded; session preserved\n");
+                    scoped::report_failure(
+                        b"Scoped pass-cli deadline exceeded; session preserved\n",
+                    );
                     std::process::exit(124);
                 }
                 scoped::report_failure(b"Scoped pass-cli execution failed; session preserved\n");
