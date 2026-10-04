@@ -1,0 +1,95 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index b2c4e0c..5ec4a8b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1114,16 +1114,6 @@ dependencies = [
+  "crossbeam-utils",
+ ]
+ 
+-[[package]]
+-name = "console_error_panic_hook"
+-version = "0.1.7"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+-dependencies = [
+- "cfg-if",
+- "wasm-bindgen",
+-]
+-
+ [[package]]
+ name = "const-oid"
+ version = "0.9.6"
+@@ -4342,47 +4332,6 @@ dependencies = [
+  "tokio",
+ ]
+ 
+-[[package]]
+-name = "pass-mobile-sdk"
+-version = "2.4.2"
+-dependencies = [
+- "anyhow",
+- "async-trait",
+- "pass",
+- "serde",
+- "serde_json",
+- "tracing",
+- "tracing-subscriber",
+- "uniffi",
+-]
+-
+-[[package]]
+-name = "pass-uniffi-bindgen"
+-version = "2.4.2"
+-dependencies = [
+- "uniffi",
+-]
+-
+-[[package]]
+-name = "pass-web-sdk"
+-version = "2.4.2"
+-dependencies = [
+- "anyhow",
+- "async-trait",
+- "console_error_panic_hook",
+- "js-sys",
+- "pass",
+- "send_wrapper",
+- "serde",
+- "serde-wasm-bindgen",
+- "time",
+- "tracing",
+- "tracing-subscriber",
+- "tsify",
+- "wasm-bindgen",
+- "wasm-bindgen-futures",
+-]
+-
+ [[package]]
+ name = "passkey"
+ version = "0.5.0"
+@@ -5997,15 +5946,6 @@ dependencies = [
+  "serde_core",
+ ]
+ 
+-[[package]]
+-name = "send_wrapper"
+-version = "0.6.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
+-dependencies = [
+- "futures-core",
+-]
+-
+ [[package]]
+ name = "serde"
+ version = "1.0.229"
+@@ -7243,9 +7183,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "76407f5f396a2c949a069eff4a9fca9ce462410eb872bffef4c2b7b89804a77a"
+ dependencies = [
+  "anyhow",
+- "camino",
+  "cargo_metadata",
+- "clap",
+  "uniffi_bindgen",
+  "uniffi_core",
+  "uniffi_macros",

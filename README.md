@@ -91,6 +91,58 @@ The built-in Docker healthcheck client is:
 proton-pass-broker healthcheck
 ```
 
+## Isolated native scope verification
+
+Trusted provisioning controllers can run the current native token scope checks
+inside this existing image:
+
+```bash
+proton-pass-broker scoped \
+  --session-dir /var/lib/proton-pass/session/infra-native-pass-scope-GENERATED \
+  -- share list --output json
+```
+
+`PROTON_PASS_SESSION_DIR` remains the **normal parent session root**. Supply the
+isolated directory through `--session-dir`. Never replace the parent environment
+variable with the isolated directory for this command.
+
+The command accepts only these exact argument lists:
+
+- `info`
+- `login`
+- `share list --output json`
+- `item list --vault-name t3-agents --output json`
+- `logout --force`
+
+The root and generated direct child must be owned by the executing UID with
+mode `0700`. Paths must be canonical. The child name must start with
+`infra-native-pass-scope-`. Existing child contents must not contain symlinks,
+hardlinked files, foreign owners, or special files. These checks prevent mistaken
+session selection. They do not sandbox malicious writers with the same UID.
+
+Set `PROTON_PASS_AGENT_REASON` for every call. Supply the candidate token through
+`PROTON_PASS_PERSONAL_ACCESS_TOKEN` only for `login`. The executor clears the
+child environment and forwards that token only to the login child. It never
+reads the normal broker token file or invokes automatic session recovery.
+
+The internal deadline defaults to 60 seconds. Set
+`PROTON_PASS_COMMAND_TIMEOUT_SECONDS` to an integer from 1 through 60 to shorten
+it. After a deadline or output error, the executor signals its own child process
+group and waits up to five additional seconds to reap the CLI process. Exit
+`124` means that the deadline expired and termination was confirmed. Other
+failures exit `1`. A process stuck in uninterruptible kernel sleep can prevent
+confirmation; the executor reports failure and retains the session.
+
+Metadata output is capped at 1 MiB. Its delivery uses nonblocking writes within
+the same deadline. A failed delivery can leave partial metadata in stdout;
+consumers must reject output after any nonzero exit. Authentication output and
+all CLI stderr are discarded. Failed commands print only generic errors. The command never removes
+session data. The controller must require successful inspection and logout
+before it removes only its own generated directory.
+
+`serve`, `healthcheck`, and the Unix-socket API keep their existing behavior.
+This command adds no service, socket, dependency, or host namespace operation.
+
 ## Compose example
 
 ```yaml
@@ -177,7 +229,15 @@ docker build -t ghcr.io/traktuner/docker-pass-cli:dev .
 ```
 
 The build compiles the configured Proton Pass CLI release from its exact
-release-tag commit using the upstream committed lockfile. A scheduled GitHub
+release-tag commit. Pass 2.4.2 carries unused SDK entries in its committed
+lockfile that Cargo refuses with `--locked`. A reviewed patch removes only
+those entries and unused feature edges. The patch is keyed to the immutable
+upstream commit. SHA-256 checks require the exact lockfile before and after
+normalization. Every retained package keeps its version, source and checksum;
+the build still uses `--locked`. Other upstream commits use their committed
+lockfiles unchanged.
+
+A scheduled GitHub
 Actions workflow checks daily for a newer stable release and publishes the
 corresponding `<version>-1`, `<version>`, and `latest` image tags only after the
 normal tests, runtime verification, vulnerability scan, SBOM, and provenance

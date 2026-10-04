@@ -40,13 +40,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
-      - uses: docker/build-push-action@v7
+      - id: image-build
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
           tags: docker-pass-cli:test
           cache-from: type=gha,scope=container-build
           cache-to: type=gha,scope=container-build,mode=max
+      - name: Diagnose the pinned upstream lockfile after a failed build
+        if: failure() && steps.image-build.outcome == 'failure'
+        run: scripts/diagnose-upstream-lock.sh
       - name: Verify image identity and runtime
         run: |
           broker_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
@@ -59,6 +63,18 @@ jobs:
             "Proton Pass CLI ${pass_version} (${pass_commit:0:7})"
           docker run --rm --entrypoint /usr/local/bin/pass-cli docker-pass-cli:test \
             info --help | grep -F "Show information about the current session"
+      - name: Verify the scoped CLI surface and normal-session rejection
+        run: |
+          docker run --rm docker-pass-cli:test scoped --help | grep -F -- "--session-dir"
+          set +e
+          scoped_output="$(docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --env PROTON_PASS_AGENT_REASON="CI rejects the normal broker session" \
+            docker-pass-cli:test scoped --session-dir /var/lib/proton-pass/session -- info 2>&1)"
+          scoped_status=$?
+          set -e
+          test "$scoped_status" -eq 1
+          test "$scoped_output" = "Scoped pass-cli execution failed; session preserved"
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:

@@ -1,3 +1,5 @@
+mod scoped;
+
 use std::{
     collections::HashMap,
     env, fmt, fs,
@@ -52,6 +54,13 @@ struct Cli {
 enum BrokerCommand {
     Serve,
     Healthcheck,
+    /// Run only native scope verification commands with an internal deadline.
+    Scoped {
+        #[arg(long)]
+        session_dir: PathBuf,
+        #[arg(last = true, num_args = 1..)]
+        arguments: Vec<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -371,11 +380,30 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = Config::from_env()?;
-
     match cli.command.unwrap_or(BrokerCommand::Serve) {
-        BrokerCommand::Serve => serve(config).await,
-        BrokerCommand::Healthcheck => healthcheck(&config.socket).await,
+        BrokerCommand::Serve => serve(Config::from_env()?).await,
+        BrokerCommand::Healthcheck => healthcheck(&Config::from_env()?.socket).await,
+        BrokerCommand::Scoped {
+            session_dir,
+            arguments,
+        } => {
+            let result = match Config::from_env() {
+                Ok(config) => scoped::run(&config, &session_dir, &arguments).await,
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result {
+                // Neither raw child output nor rejected argument values are diagnostics.
+                if error.is::<scoped::DeadlineExceeded>() {
+                    scoped::report_failure(
+                        b"Scoped pass-cli deadline exceeded; session preserved\n",
+                    );
+                    std::process::exit(124);
+                }
+                scoped::report_failure(b"Scoped pass-cli execution failed; session preserved\n");
+                std::process::exit(1);
+            }
+            Ok(())
+        }
     }
 }
 
