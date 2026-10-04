@@ -1,10 +1,5 @@
 //! Trusted-controller scope verification. This does not expose another broker API.
-use std::{
-    env, fmt, fs,
-    os::unix::fs::MetadataExt,
-    path::Path,
-    process::Stdio,
-};
+use std::{env, fmt, fs, os::unix::fs::MetadataExt, path::Path, process::Stdio};
 
 use anyhow::{Context, Result, bail};
 use tokio::{io::AsyncReadExt, process::Command, time::timeout};
@@ -30,7 +25,14 @@ pub(super) async fn run(config: &Config, session: &Path, arguments: &[String]) -
     let metadata = match args.as_slice() {
         ["info"]
         | ["share", "list", "--output", "json"]
-        | ["item", "list", "--vault-name", "t3-agents", "--output", "json"] => true,
+        | [
+            "item",
+            "list",
+            "--vault-name",
+            "t3-agents",
+            "--output",
+            "json",
+        ] => true,
         ["login"] | ["logout", "--force"] => false,
         _ => bail!("Unsupported scope command"),
     };
@@ -71,7 +73,10 @@ pub(super) async fn run(config: &Config, session: &Path, arguments: &[String]) -
 
     let mut child = command.spawn().context("Unable to start scoped pass-cli")?;
     let pid = i32::try_from(child.id().context("Scoped pass-cli has no process ID")?)?;
-    let stdout = child.stdout.take().context("Scoped output pipe is absent")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("Scoped output pipe is absent")?;
     // Read before reaping: the leader PID remains reserved while its group can
     // hold the output pipe. A timeout can signal only this owned process group.
     let result = timeout(config.command_timeout, async {
