@@ -71,6 +71,7 @@ pub(super) async fn run(config: &Config, session: &Path, arguments: &[String]) -
         }
     }
 
+    let deadline = std::time::Instant::now() + config.command_timeout;
     let mut child = command.spawn().context("Unable to start scoped pass-cli")?;
     let pid = i32::try_from(child.id().context("Scoped pass-cli has no process ID")?)?;
     let stdout = child
@@ -118,7 +119,7 @@ pub(super) async fn run(config: &Config, session: &Path, arguments: &[String]) -
         bail!("Scoped pass-cli failed");
     }
     if metadata {
-        tokio::io::AsyncWriteExt::write_all(&mut tokio::io::stdout(), &output).await?;
+        write_bounded(libc::STDOUT_FILENO, &output, deadline)?;
     }
     Ok(())
 }
@@ -167,4 +168,69 @@ fn validate_session(root: &Path, session: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// Tokio stdout uses a blocking task. Cancelling its future does not cancel the
+// write, and runtime shutdown can still wait forever. Use nonblocking writes
+// after the CLI is reaped, with the original deadline and no detached tasks.
+fn write_bounded(fd: i32, output: &[u8], deadline: std::time::Instant) -> Result<()> {
+    let original_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if original_flags < 0
+        || unsafe { libc::fcntl(fd, libc::F_SETFL, original_flags | libc::O_NONBLOCK) } < 0
+    {
+        bail!("Unable to configure scoped output");
+    }
+    let result = (|| {
+        let mut remaining_output = output;
+        while !remaining_output.is_empty() {
+            let remaining_time = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining_time.is_zero() {
+                return Err(DeadlineExceeded.into());
+            }
+            let written = unsafe {
+                libc::write(fd, remaining_output.as_ptr().cast(), remaining_output.len())
+            };
+            if written > 0 {
+                remaining_output = &remaining_output[written as usize..];
+                continue;
+            }
+            if written == 0 {
+                bail!("Scoped output did not progress");
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            if error.kind() != std::io::ErrorKind::WouldBlock {
+                return Err(error.into());
+            }
+            let mut descriptor = libc::pollfd {
+                fd,
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            let milliseconds = remaining_time.as_millis().clamp(1, i32::MAX as u128) as i32;
+            if unsafe { libc::poll(&mut descriptor, 1, milliseconds) } < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(error.into());
+                }
+            }
+        }
+        Ok(())
+    })();
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, original_flags) } < 0 {
+        bail!("Unable to restore scoped output flags");
+    }
+    result
+}
+
+pub(super) fn report_failure(message: &[u8]) {
+    // Exit status is authoritative. Diagnostics are best-effort and bounded,
+    // including when stderr shares a full stdout pipe through shell redirection.
+    let _ = write_bounded(
+        libc::STDERR_FILENO,
+        message,
+        std::time::Instant::now() + std::time::Duration::from_millis(100),
+    );
 }
