@@ -73,11 +73,21 @@ printf '{"fixture":"metadata"}\n'"#,
     for arguments in [
         vec!["info"],
         vec!["share", "list", "--output", "json"],
-        vec!["item", "list", "--vault-name", "t3-agents", "--output", "json"],
+        vec![
+            "item",
+            "list",
+            "--vault-name",
+            "t3-agents",
+            "--output",
+            "json",
+        ],
     ] {
         let output = test
             .command(&arguments)
-            .env("PROTON_PASS_PERSONAL_ACCESS_TOKEN", "SYNTHETIC_TOKEN_MARKER")
+            .env(
+                "PROTON_PASS_PERSONAL_ACCESS_TOKEN",
+                "SYNTHETIC_TOKEN_MARKER",
+            )
             .env("UNRELATED_CREDENTIAL", "SYNTHETIC_UNRELATED_MARKER")
             .output()
             .unwrap();
@@ -101,7 +111,10 @@ printf '%s\n' "$PROTON_PASS_PERSONAL_ACCESS_TOKEN" >&2"#,
     );
     let output = test
         .command(&["login"])
-        .env("PROTON_PASS_PERSONAL_ACCESS_TOKEN", "SYNTHETIC_TOKEN_MARKER")
+        .env(
+            "PROTON_PASS_PERSONAL_ACCESS_TOKEN",
+            "SYNTHETIC_TOKEN_MARKER",
+        )
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -127,7 +140,14 @@ fn scoped_rejects_other_commands_before_spawn() {
     let test = Fixture::new("touch \"$PROTON_PASS_SESSION_DIR/spawned\"");
     for arguments in [
         vec!["item", "view", "proton://vault/item/password"],
-        vec!["item", "list", "--vault-name", "docker-secrets", "--output", "json"],
+        vec![
+            "item",
+            "list",
+            "--vault-name",
+            "docker-secrets",
+            "--output",
+            "json",
+        ],
         vec!["login", "--token", "SYNTHETIC_ARG_MARKER"],
         vec!["info", "--output", "json"],
         vec!["logout"],
@@ -146,7 +166,11 @@ fn scoped_rejects_other_commands_before_spawn() {
 fn scoped_rejects_normal_outside_nested_symlink_and_nonprivate_sessions() {
     let mut test = Fixture::new("touch \"$PROTON_PASS_SESSION_DIR/spawned\"");
     let original = test.session.clone();
-    let outside = test.root.parent().unwrap().join("infra-native-pass-scope-outside");
+    let outside = test
+        .root
+        .parent()
+        .unwrap()
+        .join("infra-native-pass-scope-outside");
     fs::create_dir(&outside).unwrap();
     fs::set_permissions(&outside, fs::Permissions::from_mode(0o700)).unwrap();
     let nested = original.join("infra-native-pass-scope-nested");
@@ -195,9 +219,7 @@ fn scoped_failure_never_echoes_cli_output_and_retains_both_sessions() {
 
 #[test]
 fn scoped_deadline_kills_the_actual_cli_and_preserves_its_session() {
-    let test = Fixture::new(
-        "echo $$ > \"$PROTON_PASS_SESSION_DIR/pid\"; exec /bin/sleep 30",
-    );
+    let test = Fixture::new("echo $$ > \"$PROTON_PASS_SESSION_DIR/pid\"; exec /bin/sleep 30");
     let started = Instant::now();
     let output = test.run(&["info"]);
     assert_eq!(output.status.code(), Some(124), "{output:?}");
@@ -208,7 +230,10 @@ fn scoped_deadline_kills_the_actual_cli_and_preserves_its_session() {
         .parse()
         .unwrap();
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "CLI survived deadline");
-    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
     test.assert_retained();
 }
 
