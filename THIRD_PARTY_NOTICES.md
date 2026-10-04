@@ -3,10 +3,12 @@
 ## Proton Pass CLI
 
 - Project: https://github.com/protonpass/pass-cli
-- Version: 2.1.2
-- Commit: `b0a15d41dabc4e71d2cc3cf6710595a4271355b9`
+- Version and immutable source commit: `PROTON_PASS_VERSION` and
+  `PROTON_PASS_COMMIT` in `Dockerfile`; the image records both as labels.
 - License: GNU General Public License v3.0
 
-The upstream source is compiled without modification. Its transitive Rust
-dependencies and license metadata are recorded in the source repository's
-`Cargo.lock` and generated image SBOM.
+The upstream Rust source is compiled without modification. The reviewed
+Pass 2.4.2 lockfile normalization removes orphaned SDK entries; it preserves
+every retained package version, source and checksum. See `upstream-lock-patches`
+and `README.md`. The lockfile and generated image SBOM record transitive Rust
+dependencies and license metadata.

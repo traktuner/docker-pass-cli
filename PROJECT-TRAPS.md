@@ -24,3 +24,9 @@
   write task, so runtime shutdown can hang after the CLI was reaped. The real
   CLI regression keeps a pipe reader open without draining it; preserve that
   test (`broker/src/scoped.rs`, `broker/tests/scoped.rs`).
+- CONSTRAINT: Keep `--locked` when building pinned Pass 2.4.2. Its source
+  commit `7ae51e52818bca8df905988e4b149d43d31d4c83` omits SDK workspace members
+  still present in its committed lockfile. Cargo therefore requests pruning
+  even without dependency upgrades. Apply only the reviewed commit-keyed patch
+  with exact before/after hashes; never regenerate dependencies in the shipping
+  build (`Dockerfile`, `upstream-lock-patches`, `scripts/apply-upstream-lock-patch.sh`).

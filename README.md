@@ -229,7 +229,15 @@ docker build -t ghcr.io/traktuner/docker-pass-cli:dev .
 ```
 
 The build compiles the configured Proton Pass CLI release from its exact
-release-tag commit using the upstream committed lockfile. A scheduled GitHub
+release-tag commit. Pass 2.4.2 carries unused SDK entries in its committed
+lockfile that Cargo refuses with `--locked`. A reviewed patch removes only
+those entries and unused feature edges. The patch is keyed to the immutable
+upstream commit. SHA-256 checks require the exact lockfile before and after
+normalization. Every retained package keeps its version, source and checksum;
+the build still uses `--locked`. Other upstream commits use their committed
+lockfiles unchanged.
+
+A scheduled GitHub
 Actions workflow checks daily for a newer stable release and publishes the
 corresponding `<version>-1`, `<version>`, and `latest` image tags only after the
 normal tests, runtime verification, vulnerability scan, SBOM, and provenance
